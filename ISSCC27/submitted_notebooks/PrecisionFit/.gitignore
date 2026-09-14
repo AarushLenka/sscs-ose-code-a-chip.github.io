@@ -1,0 +1,28 @@
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+
+# Python virtualenv (see env/install_tools.sh)
+venv/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Simulation build artifacts (Verilator / Icarus)
+obj_dir/
+*.vvp
+*.vcd
+
+# Synthesis / physical-implementation intermediates.
+# Committed results live in results/ (CSVs, plots) and src/verilog/rtl/ (.v);
+# tool workspaces and scratch outputs are not tracked.
+yosys_journal
+yosys_output.txt
+openlane2/
+runs/
+
+# Implementation guide: kept local, intentionally not part of the repo
+PrecisionFit_Implementation_Guide.md
+
+# OS / editor noise
+.DS_Store
