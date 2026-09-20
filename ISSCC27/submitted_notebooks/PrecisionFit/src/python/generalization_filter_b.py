@@ -67,7 +67,11 @@ def run_filter_b(verify=True):
     uni_synth.to_csv(UNIFORM_SYNTH, index=False)
 
     sens = sensitivity_guided_sweep(h, FILTER_B_SPEC, sigs, scores=scores)
-    sens.drop(columns=["cfg"]).to_csv(SENS_SWEEP, index=False)
+    sens_out = sens.drop(columns=["cfg"]).copy()
+    # Same comma-joined bit_widths serialization as the Filter A sweep CSVs.
+    sens_out["bit_widths"] = sens_out["bit_widths"].map(
+        lambda bw: ",".join(str(int(b)) for b in bw))
+    sens_out.to_csv(SENS_SWEEP, index=False)
     sens_pass = sens[sens["passes_error_budget"]]
     print(f"Filter B sensitivity-guided sweep: {len(sens_pass)}/{len(sens)} pass")
     sens_synth = synthesize_passing(h, sens, tag_prefix="b_s")

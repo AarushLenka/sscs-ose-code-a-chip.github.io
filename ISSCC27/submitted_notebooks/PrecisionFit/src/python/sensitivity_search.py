@@ -85,7 +85,9 @@ def synthesize_passing(h, df, tag_prefix="s", max_configs=None) -> pd.DataFrame:
             print(f"  synthesis failed for {tag}: {e}")
             continue
         rows.append(dict(
-            tag=tag, module_name=module_name, rtl_path=rtl_path,
+            tag=tag, module_name=module_name,
+            # repo-relative so committed CSVs are machine-independent
+            rtl_path=paths.rel(rtl_path),
             total_cells=res["total_cells"], flop_cells=res["flop_cells"],
             comb_cells=res["comb_cells"],
             min_bits=row["min_bits"], max_bits=row["max_bits"],
@@ -119,8 +121,12 @@ def main(quick=False):
                       acc_guard_range=[4])
 
     df = sensitivity_guided_sweep(h, FILTER_A_SPEC, sigs, scores=scores, **kwargs)
-    df.drop(columns=["cfg"]).to_csv(
-        paths.SWEEPS_DIR / "sensitivity_sweep.csv", index=False)
+    df_out = df.drop(columns=["cfg"]).copy()
+    # Serialize bit_widths comma-joined so both sweep CSVs share one format
+    # (list-repr would need a special-case parser in every consumer).
+    df_out["bit_widths"] = df_out["bit_widths"].map(
+        lambda bw: ",".join(str(int(b)) for b in bw))
+    df_out.to_csv(paths.SWEEPS_DIR / "sensitivity_sweep.csv", index=False)
 
     passing = df[df["passes_error_budget"]]
     print(f"\nTotal configs swept: {len(df)}")

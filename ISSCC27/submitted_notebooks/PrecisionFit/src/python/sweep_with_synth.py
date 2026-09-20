@@ -42,7 +42,8 @@ def synthesize_uniform_passing(h, passing, tag_prefix="u") -> pd.DataFrame:
             rows.append(dict(
                 tag=tag,
                 module_name=module_name,
-                rtl_path=rtl_path,
+                # repo-relative so committed CSVs are machine-independent
+                rtl_path=paths.rel(rtl_path),
                 total_cells=res["total_cells"],
                 flop_cells=res["flop_cells"],
                 comb_cells=res["comb_cells"],
