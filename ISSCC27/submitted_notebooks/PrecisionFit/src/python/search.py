@@ -107,7 +107,7 @@ def _evaluate(h_float, spec, test_signals, cfg, coeff_bits, input_bits, acc_guar
         cfg=cfg,
     )
     if bit_widths is not None:
-        row["avg_bits_per_tap"] = float(np.mean(bit_widths))
+        row["avg_bits_per_unique_coeff"] = float(np.mean(bit_widths))
         row["bit_widths"] = list(int(b) for b in bit_widths)
     return row
 

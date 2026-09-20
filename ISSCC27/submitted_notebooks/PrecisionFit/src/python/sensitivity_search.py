@@ -68,7 +68,7 @@ def synthesize_passing(h, df, tag_prefix="s", max_configs=None) -> pd.DataFrame:
     """Generate + synthesize RTL for every passing config; return cell counts."""
     passing = df[df["passes_error_budget"]].copy()
     if max_configs is not None:
-        passing = passing.sort_values("avg_bits_per_tap").head(max_configs)
+        passing = passing.sort_values("avg_bits_per_unique_coeff").head(max_configs)
     print(f"synthesizing {len(passing)} passing sensitivity-guided configs")
 
     rows = []
@@ -91,7 +91,7 @@ def synthesize_passing(h, df, tag_prefix="s", max_configs=None) -> pd.DataFrame:
             min_bits=row["min_bits"], max_bits=row["max_bits"],
             n_levels=row["n_levels"], input_bits=row["input_bits"],
             acc_guard=row["acc_guard"],
-            avg_bits_per_tap=row["avg_bits_per_tap"],
+            avg_bits_per_unique_coeff=row["avg_bits_per_unique_coeff"],
             rms_error_wideband=row["rms_error_wideband"],
             snr_db_wideband=row["snr_db_wideband"],
             stopband_atten_db=row["stopband_atten_db"],
@@ -126,9 +126,9 @@ def main(quick=False):
     print(f"\nTotal configs swept: {len(df)}")
     print(f"Passing configs: {len(passing)}")
     if len(passing):
-        best = passing.loc[passing["avg_bits_per_tap"].idxmin()]
+        best = passing.loc[passing["avg_bits_per_unique_coeff"].idxmin()]
         print(f"Best (lowest avg bits/tap) passing config: "
-              f"avg_bits={best['avg_bits_per_tap']:.2f}, "
+              f"avg_bits={best['avg_bits_per_unique_coeff']:.2f}, "
               f"bits={best['bit_widths']}, input_bits={best['input_bits']}, "
               f"guard={best['acc_guard']}")
         print(f"  RMS error {best['rms_error_wideband']:.3e}, "
@@ -139,7 +139,7 @@ def main(quick=False):
     out = paths.SWEEPS_DIR / "sensitivity_sweep_synth.csv"
     synth_df.to_csv(out, index=False)
     print(f"\nSynthesized {len(synth_df)} configs -> {paths.rel(out)}")
-    print(synth_df[["tag", "total_cells", "avg_bits_per_tap",
+    print(synth_df[["tag", "total_cells", "avg_bits_per_unique_coeff",
                     "rms_error_wideband"]].head(10).to_string(index=False))
     return df, synth_df
 

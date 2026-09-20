@@ -71,7 +71,8 @@ def run_rtl(rtl_path, module_name: str, x_fixed: np.ndarray, cfg: FixedPointConf
                                      cfg.output_total_bits)
 
     cmd = [str(BUILD_SCRIPT), str(rtl_path), module_name, tb_v,
-           str(in_path), str(out_path), str(len(x_fixed))]
+           str(in_path), str(out_path), str(len(x_fixed)),
+           str(cfg.output_total_bits)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(

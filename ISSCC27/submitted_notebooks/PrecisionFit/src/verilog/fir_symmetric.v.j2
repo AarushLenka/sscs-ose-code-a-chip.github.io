@@ -74,7 +74,9 @@ module {{ module_name }} #(
 {% for i in range(n_pairs) %}
     wire signed [{{ prod_widths_pairs[i] - 1 }}:0] prod{{ i }} = fold{{ i }} * C{{ i }};
 {% endfor %}
+{% if n_taps % 2 == 1 %}
     wire signed [{{ prod_width_center - 1 }}:0] prod_center = sr[{{ center_index }}] * C{{ n_pairs }};
+{% endif %}
 
     // ---- binary-point alignment + sign extension to the accumulator width --------
     // Each term is padded at the LSB by its alignment shift and sign-extended to

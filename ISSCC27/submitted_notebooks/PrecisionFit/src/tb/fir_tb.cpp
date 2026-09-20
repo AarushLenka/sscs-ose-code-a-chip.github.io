@@ -1,10 +1,15 @@
 // Generic Verilator harness for the PrecisionFit FIR DUT.
 //
-//   Usage: ./VFIR <input_vectors.txt> <output_vectors.txt>
+//   Usage: ./VFIR <input_vectors.txt> <output_vectors.txt> <out_width>
 //
 // Reads one signed decimal sample per line from the input file, drives it into
 // the DUT one per cycle with in_valid=1, and writes out_data (signed decimal)
 // whenever out_valid=1, in order.
+//
+// out_width is the signed bit-width of the output port (e.g. 14). Verilator
+// maps sub-word ports to the smallest unsigned C++ type (e.g. uint16_t for 14
+// bits), so we must manually sign-extend before printing to get correct
+// negative values.
 //
 // This file is intentionally module-name agnostic: the build script compiles
 // the DUT with `verilator --prefix VFIR`, so the generated class is always
@@ -16,14 +21,21 @@
 #include <verilated.h>
 #include "VFIR.h"
 
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <vector>
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
-    if (argc < 3) {
-        std::cerr << "usage: fir_tb <in_file> <out_file>\n";
+    if (argc < 4) {
+        std::cerr << "usage: fir_tb <in_file> <out_file> <out_width>\n";
+        return 1;
+    }
+
+    int out_width = std::atoi(argv[3]);
+    if (out_width <= 0 || out_width > 64) {
+        std::cerr << "out_width must be in 1..64, got " << out_width << "\n";
         return 1;
     }
 
@@ -51,6 +63,10 @@ int main(int argc, char** argv) {
     }
     dut->rst_n = 1;
 
+    // sign-extension mask: canonical (x ^ sign_bit) - sign_bit
+    long long sign_bit = 1LL << (out_width - 1);
+    long long data_mask = (1LL << out_width) - 1;
+
     size_t idx = 0;
     // run enough cycles to flush the pipeline after the last input
     size_t total_cycles = inputs.size() + 32;
@@ -71,7 +87,9 @@ int main(int argc, char** argv) {
         dut->clk = 1;
         dut->eval();
         if (dut->out_valid) {
-            fout << (long long)dut->out_data << "\n";
+            long long raw = (long long)dut->out_data & data_mask;
+            long long extended = (raw ^ sign_bit) - sign_bit;
+            fout << extended << "\n";
         }
     }
 

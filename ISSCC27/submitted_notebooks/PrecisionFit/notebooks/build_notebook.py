@@ -708,9 +708,11 @@ the two kinds of "error number" are kept apart:
 They answer different questions, so they are reported in separate columns and
 never merged.
 
-The stress set adds an explicit **overflow_stress** signal (alternating
-±full-scale — the worst case for accumulator growth in a symmetric lowpass,
-where every tap contributes the same sign at DC) to the standard signals.""")
+The stress set adds two explicit overflow signals to the standard test vectors:
+**overflow_stress_dc** (DC full-scale — the worst case for accumulator growth
+in a symmetric lowpass, where every tap contributes the same sign) and
+**overflow_stress_nyquist** (alternating ±full-scale — exercised for coverage
+of the opposite frequency extreme).""")
 
 code(r"""from final_stress_test import run as run_stress
 stress_df, stress_rtl = run_stress(h=h, n_samples=2048, verify=True)

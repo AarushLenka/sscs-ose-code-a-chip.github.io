@@ -40,10 +40,16 @@ def build_comparison(h=None, verbose=True):
 
     # "Best uniform" = fewest synthesized cells among passing configs.
     best_uniform = uniform.loc[uniform["total_cells"].idxmin()]
-    # "Conservative uniform" = the widest config that still passes, i.e. the
-    # most-margin / most area-expensive passing point (a real sweep result,
-    # not a hand-picked strawman).
-    conservative_uniform = uniform.loc[uniform["total_cells"].idxmax()]
+    # "Conservative uniform" = the balanced, widest-margin config. We pick the
+    # passing config whose min(coeff_bits, input_bits) is highest -- this
+    # ensures a balanced "wide with margin" design rather than an imbalanced
+    # grid point (e.g. huge input_bits but tiny coeff_bits) that happens to
+    # produce the most cells. Falls back to max cells if min_width ties.
+    uniform = uniform.copy()
+    uniform["_min_width"] = uniform[["coeff_bits", "input_bits"]].min(axis=1)
+    conservative_uniform = uniform.sort_values(
+        ["_min_width", "total_cells"], ascending=[False, False]).iloc[0]
+    uniform = uniform.drop(columns=["_min_width"])
     best_sensitivity = sens.loc[sens["total_cells"].idxmin()]
 
     comparison = pd.DataFrame([
@@ -67,7 +73,7 @@ def build_comparison(h=None, verbose=True):
              cells=int(best_sensitivity["total_cells"]),
              rms_error=float(best_sensitivity["rms_error_wideband"]),
              snr_db=float(best_sensitivity["snr_db_wideband"]),
-             coeff_bits=int(round(best_sensitivity["avg_bits_per_tap"])),
+             coeff_bits=int(round(best_sensitivity["avg_bits_per_unique_coeff"])),
              input_bits=int(best_sensitivity["input_bits"]),
              acc_guard=int(best_sensitivity["acc_guard"]),
              bit_widths=best_sensitivity["bit_widths"]),

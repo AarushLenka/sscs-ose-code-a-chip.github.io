@@ -122,7 +122,7 @@ def run_filter_b(verify=True):
 
     # ---- bit-exact verification of the Filter B winner ----------------------
     if verify:
-        cfg = make_cfg(int(round(best_s["avg_bits_per_tap"])),
+        cfg = make_cfg(int(round(best_s["avg_bits_per_unique_coeff"])),
                        int(best_s["input_bits"]), int(best_s["acc_guard"]))
         bits = np.asarray([int(b) for b in str(best_s["bit_widths"]).split(",")])
         rtl_path = generate_rtl_nonuniform(h, cfg, bits, config_name="b_sens_best")

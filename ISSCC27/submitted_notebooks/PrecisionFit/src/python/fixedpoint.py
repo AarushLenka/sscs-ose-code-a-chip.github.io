@@ -117,9 +117,14 @@ class FixedPointConfig:
 
 
 def quantize_coeffs(h_float: np.ndarray, cfg: FixedPointConfig) -> np.ndarray:
-    """Quantize coefficients once (they're constants -> ROM/hardwired in RTL)."""
+    """Quantize coefficients once (they're constants -> ROM/hardwired in RTL).
+    Enforces symmetry after rounding so the model matches the RTL's folded
+    architecture even if h_float has microscopic float asymmetry."""
     q = float_to_fixed(h_float, cfg.coeff_frac_bits, cfg.coeff_total_bits, mode="round")
     q = saturate(q, cfg.coeff_total_bits)
+    # enforce symmetry: RTL uses q[i] for both taps i and N-1-i
+    n_pairs = len(q) // 2
+    q[len(q) - 1:n_pairs:-1] = q[:n_pairs]
     return q
 
 
@@ -143,6 +148,8 @@ def quantize_coeffs_per_tap(h_float: np.ndarray, cfg: FixedPointConfig,
         total_bits = cfg.coeff_int_bits + int(f)
         v = float_to_fixed(np.array([h_float[i]]), int(f), total_bits, mode="round")
         q[i] = saturate(v, total_bits)[0]
+    # enforce symmetry: RTL uses q[i] for both taps i and N-1-i
+    q[len(q) - 1:n_pairs:-1] = q[:n_pairs]
     return q
 
 
@@ -175,17 +182,28 @@ def fir_fixed_point(x_float: np.ndarray, h_float: np.ndarray,
 
     y_raw = np.zeros(n, dtype=np.int64)
     overflow_events = 0
+    clip_events = 0
+
+    out_lo = -(2 ** (cfg.output_total_bits - 1))
+    out_hi = (2 ** (cfg.output_total_bits - 1)) - 1
 
     padded = np.concatenate([np.zeros(n_taps - 1, dtype=np.int64), x_fixed])
     for i in range(n):
         window = padded[i:i + n_taps][::-1]
-        products = window.astype(np.int64) * h_fixed.astype(np.int64)
-        acc = int(products.sum())
+        # use Python int() to avoid int64 overflow for wide configs (N1 fix)
+        products = [int(w) * int(c) for w, c in zip(window, h_fixed)]
+        acc = sum(products)
 
         if acc > acc_hi or acc < acc_lo:
             overflow_events += 1
             if cfg.saturate_output:
                 acc = max(acc_lo, min(acc_hi, acc))
+            else:
+                # W1 fix: hardware register wraps modulo 2**acc_bits before shift
+                mask = (1 << acc_bits) - 1
+                acc = acc & mask
+                if acc >= (1 << (acc_bits - 1)):
+                    acc -= (1 << acc_bits)
 
         acc_frac_bits = cfg.coeff_frac_bits + cfg.input_frac_bits
         shift = acc_frac_bits - cfg.output_frac_bits
@@ -196,6 +214,10 @@ def fir_fixed_point(x_float: np.ndarray, h_float: np.ndarray,
         else:
             acc_shifted = acc >> shift
 
+        # W3 fix: track output clipping separately from accumulator overflow
+        if acc_shifted > out_hi or acc_shifted < out_lo:
+            clip_events += 1
+
         if not cfg.saturate_output:
             acc_shifted = wrap(np.array([acc_shifted]), cfg.output_total_bits)[0]
         else:
@@ -205,7 +227,7 @@ def fir_fixed_point(x_float: np.ndarray, h_float: np.ndarray,
 
     y_float = fixed_to_float(y_raw, cfg.output_frac_bits)
     return dict(y_float=y_float, y_raw=y_raw, overflow_events=overflow_events,
-                h_fixed=h_fixed, x_fixed=x_fixed)
+                clip_events=clip_events, h_fixed=h_fixed, x_fixed=x_fixed)
 
 
 def fir_fixed_point_per_tap(x_float: np.ndarray, h_float: np.ndarray,
@@ -245,9 +267,13 @@ def fir_fixed_point_per_tap(x_float: np.ndarray, h_float: np.ndarray,
 
     y_raw = np.zeros(n, dtype=np.int64)
     overflow_events = 0
+    clip_events = 0
     acc_frac_bits = cfg.input_frac_bits + F
     shift = acc_frac_bits - cfg.output_frac_bits
     assert shift >= 0, "output_frac_bits must be <= accumulator fractional bits"
+
+    out_lo = -(2 ** (cfg.output_total_bits - 1))
+    out_hi = (2 ** (cfg.output_total_bits - 1)) - 1
 
     padded = np.concatenate([np.zeros(n_taps - 1, dtype=np.int64), x_fixed])
     for i in range(n):
@@ -258,11 +284,21 @@ def fir_fixed_point_per_tap(x_float: np.ndarray, h_float: np.ndarray,
             overflow_events += 1
             if cfg.saturate_output:
                 acc = max(acc_lo, min(acc_hi, acc))
+            else:
+                # W1 fix: hardware register wraps modulo 2**acc_bits before shift
+                mask = (1 << acc_bits) - 1
+                acc = acc & mask
+                if acc >= (1 << (acc_bits - 1)):
+                    acc -= (1 << acc_bits)
 
         if cfg.rounding == "round" and shift > 0:
             acc_shifted = (acc + (1 << (shift - 1))) >> shift
         else:
             acc_shifted = acc >> shift
+
+        # W3 fix: track output clipping separately from accumulator overflow
+        if acc_shifted > out_hi or acc_shifted < out_lo:
+            clip_events += 1
 
         if not cfg.saturate_output:
             acc_shifted = wrap(np.array([acc_shifted]), cfg.output_total_bits)[0]
@@ -273,7 +309,7 @@ def fir_fixed_point_per_tap(x_float: np.ndarray, h_float: np.ndarray,
 
     y_float = fixed_to_float(y_raw, cfg.output_frac_bits)
     return dict(y_float=y_float, y_raw=y_raw, overflow_events=overflow_events,
-                h_fixed=h_fixed, h_fixed_unique=h_fixed_unique,
+                clip_events=clip_events, h_fixed=h_fixed, h_fixed_unique=h_fixed_unique,
                 h_common=h_common, x_fixed=x_fixed, coeff_frac_bits_max=F)
 
 
@@ -319,6 +355,15 @@ def fir_fixed_point_fast(x_float: np.ndarray, h_float: np.ndarray,
     overflow_events = int(np.sum((acc > acc_hi) | (acc < acc_lo)))
     if cfg.saturate_output:
         acc = np.clip(acc, acc_lo, acc_hi)
+    else:
+        # W1 fix: hardware wraps at acc_bits before the shift
+        overflow_mask = (acc > acc_hi) | (acc < acc_lo)
+        if np.any(overflow_mask):
+            mask_val = (1 << acc_bits) - 1
+            sign_val = 1 << (acc_bits - 1)
+            wrapped = acc & mask_val
+            wrapped = np.where(wrapped >= sign_val, wrapped - (1 << acc_bits), wrapped)
+            acc = np.where(overflow_mask, wrapped, acc)
 
     acc_frac_bits = cfg.coeff_frac_bits + cfg.input_frac_bits
     shift = acc_frac_bits - cfg.output_frac_bits
@@ -329,17 +374,21 @@ def fir_fixed_point_fast(x_float: np.ndarray, h_float: np.ndarray,
     else:
         shifted = acc >> shift
 
+    # W3 fix: track output clipping
+    out_lo = -(2 ** (cfg.output_total_bits - 1))
+    out_hi = (2 ** (cfg.output_total_bits - 1)) - 1
+    clip_events = int(np.sum((shifted > out_hi) | (shifted < out_lo)))
+
     if not cfg.saturate_output:
         y_raw = wrap(np.array([int(v) for v in shifted]), cfg.output_total_bits)
     else:
-        y_raw = np.array([int(v) for v in shifted], dtype=object)
-        out_lo = -(2 ** (cfg.output_total_bits - 1))
-        out_hi = (2 ** (cfg.output_total_bits - 1)) - 1
-        y_raw = np.clip(y_raw, out_lo, out_hi)
+        y_raw = np.clip(np.array([int(v) for v in shifted], dtype=object),
+                        out_lo, out_hi)
     y_raw = np.array([int(v) for v in y_raw], dtype=np.int64)
 
     return dict(y_float=fixed_to_float(y_raw, cfg.output_frac_bits),
                 y_raw=y_raw, overflow_events=overflow_events,
+                clip_events=clip_events,
                 h_fixed=quantize_coeffs(h_float, cfg), x_fixed=x_fixed)
 
 
@@ -376,12 +425,22 @@ def fir_fixed_point_per_tap_fast(x_float: np.ndarray, h_float: np.ndarray,
 
     padded = np.concatenate([np.zeros(n_taps - 1, dtype=np.int64), x_fixed])
     windows = np.lib.stride_tricks.sliding_window_view(padded, n_taps)[:, ::-1]
-    acc = np.array([int((windows[i].astype(object) * h_common).sum())
-                    for i in range(n)], dtype=object)
+    # W5 fix: fully vectorized (was a Python list comprehension per sample)
+    acc = (windows.astype(object) * h_common[None, :]).sum(axis=1)
+    acc = np.array([int(v) for v in acc], dtype=object)
 
     overflow_events = int(np.sum((acc > acc_hi) | (acc < acc_lo)))
     if cfg.saturate_output:
         acc = np.clip(acc, acc_lo, acc_hi)
+    else:
+        # W1 fix: hardware wraps at acc_bits before the shift
+        overflow_mask = (acc > acc_hi) | (acc < acc_lo)
+        if np.any(overflow_mask):
+            mask_val = (1 << acc_bits) - 1
+            sign_val = 1 << (acc_bits - 1)
+            wrapped = acc & mask_val
+            wrapped = np.where(wrapped >= sign_val, wrapped - (1 << acc_bits), wrapped)
+            acc = np.where(overflow_mask, wrapped, acc)
 
     acc_frac_bits = cfg.input_frac_bits + F
     shift = acc_frac_bits - cfg.output_frac_bits
@@ -392,15 +451,19 @@ def fir_fixed_point_per_tap_fast(x_float: np.ndarray, h_float: np.ndarray,
     else:
         shifted = acc >> shift
 
+    # W3 fix: track output clipping
+    out_lo = -(2 ** (cfg.output_total_bits - 1))
+    out_hi = (2 ** (cfg.output_total_bits - 1)) - 1
+    clip_events = int(np.sum((shifted > out_hi) | (shifted < out_lo)))
+
     if not cfg.saturate_output:
         y_raw = wrap(np.array([int(v) for v in shifted]), cfg.output_total_bits)
     else:
-        out_lo = -(2 ** (cfg.output_total_bits - 1))
-        out_hi = (2 ** (cfg.output_total_bits - 1)) - 1
         y_raw = np.clip(np.array([int(v) for v in shifted], dtype=object),
                         out_lo, out_hi)
     y_raw = np.array([int(v) for v in y_raw], dtype=np.int64)
 
     return dict(y_float=fixed_to_float(y_raw, cfg.output_frac_bits),
                 y_raw=y_raw, overflow_events=overflow_events,
+                clip_events=clip_events,
                 h_fixed=h_fixed, x_fixed=x_fixed, coeff_frac_bits_max=F)

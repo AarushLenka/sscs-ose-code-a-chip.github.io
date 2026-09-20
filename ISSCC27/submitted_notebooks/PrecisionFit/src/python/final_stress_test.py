@@ -23,10 +23,18 @@ from verify_rtl import verify_config, LATENCY_CYCLES
 OUT_CSV = paths.PARETO_DIR / "stress_test.csv"
 
 
-def overflow_stress_signal(n=4096, amp=0.999):
+def overflow_stress_dc(n=4096, amp=0.999):
     """
-    Alternating +/- full scale. Worst case for accumulator growth in a
-    symmetric lowpass, where every tap contributes the same sign at DC.
+    DC full-scale: worst case for accumulator growth in a symmetric lowpass,
+    where every tap contributes the same sign.
+    """
+    return np.full(n, amp)
+
+
+def overflow_stress_nyquist(n=4096, amp=0.999):
+    """
+    Alternating +/- full scale (Nyquist frequency). Worst case for
+    highpass / bandpass architectures; exercised here for coverage.
     """
     x = np.empty(n)
     x[0::2] = amp
@@ -39,7 +47,8 @@ def run(h=None, n_samples=4096, verify=True):
     if h is None:
         h = design_filter(FILTER_A_SPEC)
     sigs = make_test_signals(FILTER_A_SPEC["fs"], n_samples=n_samples)
-    sigs["overflow_stress"] = overflow_stress_signal(n_samples)
+    sigs["overflow_stress_dc"] = overflow_stress_dc(n_samples)
+    sigs["overflow_stress_nyquist"] = overflow_stress_nyquist(n_samples)
 
     configs = headline_configs(h)
     rows = []
