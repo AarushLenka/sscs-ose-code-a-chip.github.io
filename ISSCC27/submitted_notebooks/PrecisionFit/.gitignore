@@ -24,5 +24,8 @@ runs/
 # Implementation guide: kept local, intentionally not part of the repo
 PrecisionFit_Implementation_Guide.md
 
+# Audit report: kept local, intentionally not part of the repo
+CODEBASE_AUDIT.md
+
 # OS / editor noise
 .DS_Store
