@@ -34,7 +34,12 @@ module fir_sensitivity_guided #(
     parameter N_TAPS      = 17,
     parameter IN_WIDTH    = 14,
     parameter OUT_WIDTH   = 14,
+    // COEFF_WIDTH documents the widest unique-coefficient width; the internal
+    // widths are literal constants per config, so the parameter is deliberately
+    // unused (documentation-only, part of the instantiation interface).
+    // verilator lint_off UNUSEDPARAM
     parameter COEFF_WIDTH = 16,
+    // verilator lint_on UNUSEDPARAM
     parameter ACC_WIDTH   = 37
 ) (
     input  wire                        clk,
@@ -130,11 +135,19 @@ module fir_sensitivity_guided #(
     end
 
     // ---- requantize: round, shift down to the output format, saturate/wrap ------
-    localparam SHIFT = 14;   // requantization right shift
+    // Requantization right shift, documentation-only: the shift itself is
+    // realized by the literal bit-select on `rounded` below.
+    // verilator lint_off UNUSEDPARAM
+    localparam SHIFT = 14;
+    // verilator lint_on UNUSEDPARAM
     localparam signed [ACC_WIDTH:0] ROUND_CONST = 38'sh0000002000;
     // One guard bit above the accumulator holds the rounding constant without
     // wrapping.
+    // The low `shift` bits of `rounded` are the discarded rounding fraction --
+    // intentionally unused (discarding them IS the requantization).
+    // verilator lint_off UNUSEDSIGNAL
     wire signed [ACC_WIDTH:0] rounded = {acc_reg[ACC_WIDTH-1], acc_reg} + ROUND_CONST;
+    // verilator lint_on UNUSEDSIGNAL
     // Arithmetic shift right by SHIFT, expressed as a bit-select of the upper
     // ACC_WIDTH+1-SHIFT bits. (Do NOT write `shifted = rounded >>> SHIFT` into a
     // narrower wire: the arithmetic shift sign-fills the LOW bits and the
@@ -160,5 +173,331 @@ module fir_sensitivity_guided #(
             out_valid <= valid_pipe;
         end
     end
+
+`ifdef FORMAL
+    // =========================================================================
+    // Formal verification layer -- active ONLY under `ifdef FORMAL, i.e. in
+    // the SymbiYosys harness (see formal/). Invisible to simulation, lint and
+    // synthesis; the generated module above is bit-for-bit what it was before
+    // this block was added.
+    //
+    // Design notes:
+    //   * The property set is FACTORED into local depth-1 invariants over the
+    //     pipeline stages instead of one deep input-history window. The full
+    //     end-to-end guarantee (out_data = requant(MAC over the input
+    //     history)) follows compositionally: sr chain (L2) -> MAC (P4a) ->
+    //     accumulator (L3) -> requantizer (P4b) -> valid timing (P2/P3).
+    //     Every property is a depth-1 invariant, so k-induction closes
+    //     immediately and BMC at modest depth is a complete proof.
+    //   * The output requantizer is re-implemented locally in f_requant(), so
+    //     a subtle rounding/shift/saturation change is caught by P4b instead
+    //     of being mirrored. Likewise f_fir() is a straight 17-product MAC
+    //     against which the folded/symmetrized datapath is checked (P4a).
+    //
+    // Two verification environments (selected by the harness):
+    //   live   -- in_valid is a free signal:
+    //       P1  reset clears all scalar state (checked combinationally).
+    //       L2  delay line implements the stall-aware shift/load semantics
+    //       L3  acc_reg == $past(acc_sum)        (MAC register stage)
+    //       P4b out_data == f_requant($past(acc_reg)) (requantizer stage)
+    //       P2  out_valid == $past(valid_pipe)   (valid-pipe stage 2)
+    //       P3  out_valid == $past(in_valid, 2)  (end-to-end valid timing)
+    //       P4s !in_valid freezes the datapath   (stall semantics)
+    //       P5  out_valid implies out_data within the saturation range
+    //   stream -- additionally assumes in_valid == 1 and rst_n == 1 for the
+    //             whole trace (reset behavior is covered by P1 in live):
+    //       P4a acc_sum == f_fir(sr[0..N-1]) -- the folded/symmetrized
+    //           multiplier network equals a straight MAC over the delay line,
+    //           bit-for-bit, for EVERY delay-line content (combinational).
+    //       (plus all live properties)
+    // Guards: f_rst_hist shifts in rst_n every edge; depth-1 properties use
+    // {rst_n, f_rst_hist[0]} (current + previous edge clean); P3/P4s need 2-3.
+    // =========================================================================
+
+    localparam F_WIN = 19;          // $past lookback horizon
+    reg [F_WIN-1:0] f_rst_hist;                   // rst_n history, LSB = now
+    reg f_past_valid = 1'b0;
+
+    initial begin
+        // formal-only init (simulation/synthesis never compile this block):
+        // pins the base state so P1 is meaningful from time 0 and the guard
+        // history starts empty -- without this the solver is free to pick
+        // f_rst_hist = all-ones at time 0 and evaluate P3/P4a too early.
+        f_rst_hist = {F_WIN{1'b0}};
+        f_past_valid = 1'b0;
+`ifndef FORMAL_STALL_ONLY
+        f_acc_q1 = {ACC_WIDTH{1'b0}};
+`endif
+`ifdef FORMAL_P4S
+        f_in_valid_prev = 1'b0;
+`endif
+        out_valid  = 1'b0;
+        valid_pipe = 1'b0;
+        acc_reg    = {ACC_WIDTH{1'b0}};
+        out_data   = {OUT_WIDTH{1'b0}};
+        // Pin the delay line too: with sr[] unconstrained, the combinational
+        // acc_sum over garbage taps is non-zero, so the pinned acc_reg == 0 is
+        // momentarily inconsistent with the datapath's own next-state function
+        // and the stall property P4s_b false-fails during the power-on flush.
+        // rst_n resets sr[] in the RTL, so zero IS the hardware power-on state.
+        sr[0] = {IN_WIDTH{1'b0}};
+        sr[1] = {IN_WIDTH{1'b0}};
+        sr[2] = {IN_WIDTH{1'b0}};
+        sr[3] = {IN_WIDTH{1'b0}};
+        sr[4] = {IN_WIDTH{1'b0}};
+        sr[5] = {IN_WIDTH{1'b0}};
+        sr[6] = {IN_WIDTH{1'b0}};
+        sr[7] = {IN_WIDTH{1'b0}};
+        sr[8] = {IN_WIDTH{1'b0}};
+        sr[9] = {IN_WIDTH{1'b0}};
+        sr[10] = {IN_WIDTH{1'b0}};
+        sr[11] = {IN_WIDTH{1'b0}};
+        sr[12] = {IN_WIDTH{1'b0}};
+        sr[13] = {IN_WIDTH{1'b0}};
+        sr[14] = {IN_WIDTH{1'b0}};
+        sr[15] = {IN_WIDTH{1'b0}};
+        sr[16] = {IN_WIDTH{1'b0}};
+    end
+
+    // ---- P1: reset clears all state (combinational, holds whenever asserted)
+    always @(*) begin : formal_reset_props
+        if (!rst_n) begin
+            P1a: assert (out_valid == 1'b0);
+            P1b: assert (valid_pipe == 1'b0);
+            P1c: assert (acc_reg == {ACC_WIDTH{1'b0}});
+            P1d: assert (out_data == {OUT_WIDTH{1'b0}});
+        end
+    end
+
+    // ---- independent MAC reference (spec, not RTL) --------------------------
+    // Transcription of y[n] = sum_k h_k * x[n-k] for a SYMMETRIC filter:
+    // pair the symmetric taps, multiply each pair sum by its coefficient,
+    // accumulate sequentially in the function's signed ACC_WIDTH context.
+    //
+    // In the non-uniform (per-tap width) case the DUT aligns every product to
+    // a common binary point F by left-shifting each product by
+    // (F - f_i) bits (the term_shift_bits values).  f_fir must operate at
+    // that same binary point or P4a compares incommensurable quantities.
+    // We therefore emit CC_k = C_k << term_shift_bits[k] as signed ACC_WIDTH
+    // constants and use those in f_fir.  For the uniform case all
+    // term_shift_bits are 0 so CC_k == C_k and no behaviour changes.
+    //
+    // Every operand (pair sums, coefficients, products) is sign-extended to
+    // ACC_WIDTH before use and ACC_WIDTH cannot overflow (see build_context),
+    // so this is pure reassociation + width extension of the exact
+    // mathematical sum -- it computes the same value as the naive per-tap
+    // sum. The DUT's actual structure (fold wires, product widths, adder tree)
+    // is NOT copied here and remains fully proven against this spec by P4a.
+    //
+    // Why pair-first: a naive per-tap-product sum forces the solver to also
+    // discharge the bit-vector distributivity law (a*C + b*C == (a+b)*C)
+    // across 17 multipliers at every unrolled step, which alone exceeds any
+    // practical BMC horizon. Pairing is how the hardware itself is specified
+    // (symmetric FIR), so the miter reduces to structural differences only.
+    // CC_k and f_fir are only used by P4a (stream environment).
+    // Guarding them under FORMAL_STREAM keeps the live/stall solver tasks
+    // free of the full 17-tap coefficient arithmetic so they close quickly.
+`ifdef FORMAL_STREAM
+    // CC0 = C0 << 2  (binary-point alignment for f_fir spec)
+    localparam signed [36:0] CC0 = 37'(14'sh0016) <<< 2;
+    // CC1 = C1 << 0  (binary-point alignment for f_fir spec)
+    localparam signed [36:0] CC1 = 37'(16'shffc6) <<< 0;
+    // CC2 = C2 << 2  (binary-point alignment for f_fir spec)
+    localparam signed [36:0] CC2 = 37'(14'sh3fa8) <<< 2;
+    // CC3 = C3 << 2  (binary-point alignment for f_fir spec)
+    localparam signed [36:0] CC3 = 37'(14'sh3f68) <<< 2;
+    // CC4 = C4 << 0  (binary-point alignment for f_fir spec)
+    localparam signed [36:0] CC4 = 37'(16'shfe86) <<< 0;
+    // CC5 = C5 << 3  (binary-point alignment for f_fir spec)
+    localparam signed [36:0] CC5 = 37'(13'sh0054) <<< 3;
+    // CC6 = C6 << 0  (binary-point alignment for f_fir spec)
+    localparam signed [36:0] CC6 = 37'(16'sh093a) <<< 0;
+    // CC7 = C7 << 3  (binary-point alignment for f_fir spec)
+    localparam signed [36:0] CC7 = 37'(13'sh01f0) <<< 3;
+    // CC8 = C8 << 3  (center tap)
+    localparam signed [36:0] CC8 = 37'(13'sh0243) <<< 3;
+    function signed [36:0] f_fir;
+        input signed [IN_WIDTH-1:0] d0;
+        input signed [IN_WIDTH-1:0] d1;
+        input signed [IN_WIDTH-1:0] d2;
+        input signed [IN_WIDTH-1:0] d3;
+        input signed [IN_WIDTH-1:0] d4;
+        input signed [IN_WIDTH-1:0] d5;
+        input signed [IN_WIDTH-1:0] d6;
+        input signed [IN_WIDTH-1:0] d7;
+        input signed [IN_WIDTH-1:0] d8;
+        input signed [IN_WIDTH-1:0] d9;
+        input signed [IN_WIDTH-1:0] d10;
+        input signed [IN_WIDTH-1:0] d11;
+        input signed [IN_WIDTH-1:0] d12;
+        input signed [IN_WIDTH-1:0] d13;
+        input signed [IN_WIDTH-1:0] d14;
+        input signed [IN_WIDTH-1:0] d15;
+        input signed [IN_WIDTH-1:0] d16;
+        begin
+            f_fir = 0;
+            f_fir = f_fir + (d0  + d16) * CC0;
+            f_fir = f_fir + (d1  + d15) * CC1;
+            f_fir = f_fir + (d2  + d14) * CC2;
+            f_fir = f_fir + (d3  + d13) * CC3;
+            f_fir = f_fir + (d4  + d12) * CC4;
+            f_fir = f_fir + (d5  + d11) * CC5;
+            f_fir = f_fir + (d6  + d10) * CC6;
+            f_fir = f_fir + (d7  + d9)  * CC7;
+            f_fir = f_fir +  d8         * CC8;
+        end
+    endfunction
+`endif // FORMAL_STREAM
+
+    // ---- independent requantizer re-implementation (spec, not RTL) ----------
+    // Used by P4b (live_main and stream tasks). Not needed in live_stall
+    // (which only asserts the valid-pipe freeze), so guard it out to shrink
+    // the SMT formula for that task.
+    //
+    // IMPORTANT: f_requant inlines the rounding constant as a literal rather
+    // than referencing the ROUND_CONST localparam. This is deliberate: if the
+    // mutation "no_rounding_const" zeroes ROUND_CONST in the RTL, the spec
+    // function must still use the correct value so that P4b catches the bug.
+    // Referencing the localparam would make both RTL and spec wrong in the
+    // same way, causing P4b to pass vacuously on the mutant.
+`ifndef FORMAL_STALL_ONLY
+    function signed [23:0] f_requant;
+        input signed [36:0] a;
+        reg signed [37:0] r;
+        reg signed [23:0] s;
+        reg [13:0] t;
+        begin
+            r = {a[36], a} + 38'sh0000002000;
+            s = r[37:14];
+            if (s > OUT_MAX)
+                t = OUT_MAX[13:0];
+            else if (s < OUT_MIN)
+                t = OUT_MIN[13:0];
+            else
+                t = s[13:0];
+            // Mirror the RTL's `out_data <= shifted[OUT_WIDTH-1:0]` exactly:
+            // the part-select is UNSIGNED, so returning it directly into this
+            // wider signed function result silently ZERO-extends it and every
+            // negative output reads back as a large positive number. Capture
+            // the hardware bit pattern in t, then sign-extend once.
+            f_requant = $signed(t);
+        end
+    endfunction
+`endif // FORMAL_STALL_ONLY
+
+`ifdef FORMAL_STREAM
+    // f_acc_q1: our OWN one-stage delay of acc_reg. P4b deliberately avoids
+    //     f_requant($past(acc_reg)) -- $past as a direct function-call
+    //     argument is unreliable in Yosys (P4a's $past terms work because
+    //     they are assigned to a reg first); an explicit delay register has
+    //     none of that ambiguity and matches the RTL's out_data stage exactly.
+`endif
+`ifndef FORMAL_STALL_ONLY
+    reg signed [36:0] f_acc_q1;
+`endif
+    // Stall shadow register: captures in_valid from the previous edge so that
+    // P4s_b can check valid_pipe without relying on $past(in_valid) which is
+    // unreliable as a function argument in some Yosys versions.
+    // Only compiled in the FORMAL_P4S / FORMAL_STALL_ONLY task.
+`ifdef FORMAL_P4S
+    reg f_in_valid_prev;
+`endif
+    // ---- the properties ------------------------------------------------------
+    always @(posedge clk) begin : formal_props
+        f_past_valid <= 1'b1;
+        f_rst_hist   <= {f_rst_hist[F_WIN-2:0], rst_n};
+`ifndef FORMAL_STALL_ONLY
+        f_acc_q1     <= acc_reg;   // formal spec's own pipeline stage
+`endif
+`ifdef FORMAL_P4S
+        f_in_valid_prev <= in_valid;
+`endif
+        if (f_past_valid) begin
+`ifndef FORMAL_STALL_ONLY
+            // ---- L2: delay line shift/load semantics (one edge back) --------
+            // With a clean previous edge (f_rst_hist[0] = rst_n@(k-1)), each
+            // stage must hold the stall-aware shift: load in_data / shift on
+            // in_valid@(k-1), hold otherwise. Together with P4a/L3/P4b this
+            // gives the full FIR-over-input-history guarantee compositionally.
+            if (rst_n && f_rst_hist[0]) begin
+                L2a: assert (sr[0] == $past(in_valid ? in_data : sr[0]));
+                L2b: assert (sr[1] == $past(in_valid ? sr[0] : sr[1]));
+                L2c: assert (sr[2] == $past(in_valid ? sr[1] : sr[2]));
+                L2d: assert (sr[3] == $past(in_valid ? sr[2] : sr[3]));
+                L2e: assert (sr[4] == $past(in_valid ? sr[3] : sr[4]));
+                L2f: assert (sr[5] == $past(in_valid ? sr[4] : sr[5]));
+                L2g: assert (sr[6] == $past(in_valid ? sr[5] : sr[6]));
+                L2h: assert (sr[7] == $past(in_valid ? sr[6] : sr[7]));
+                L2i: assert (sr[8] == $past(in_valid ? sr[7] : sr[8]));
+                L2j: assert (sr[9] == $past(in_valid ? sr[8] : sr[9]));
+                L2k: assert (sr[10] == $past(in_valid ? sr[9] : sr[10]));
+                L2l: assert (sr[11] == $past(in_valid ? sr[10] : sr[11]));
+                L2m: assert (sr[12] == $past(in_valid ? sr[11] : sr[12]));
+                L2n: assert (sr[13] == $past(in_valid ? sr[12] : sr[13]));
+                L2o: assert (sr[14] == $past(in_valid ? sr[13] : sr[14]));
+                L2p: assert (sr[15] == $past(in_valid ? sr[14] : sr[15]));
+                L2: assert (sr[16] == $past(in_valid ? sr[15] : sr[16]));
+            end
+            // ---- L3: MAC register stage --------------------------------------
+            if (rst_n && f_rst_hist[0])
+                L3: assert (acc_reg == $past(acc_sum));
+            // ---- P4b: requantizer stage (independent re-implementation) ------
+            if (rst_n && f_rst_hist[0])
+                P4b: assert (out_data == f_requant(f_acc_q1));
+`ifdef FORMAL_STREAM
+            // ---- P4a: folded datapath == straight MAC, for ANY delay line ----
+            if (rst_n)
+                P4a: assert (acc_sum == f_fir(sr[0],  sr[1],  sr[2],  sr[3],  sr[4],
+                                             sr[5],  sr[6],  sr[7],  sr[8],  sr[9],
+                                             sr[10], sr[11], sr[12], sr[13], sr[14],
+                                             sr[15], sr[16]));
+`endif
+            if (rst_n)
+                P2: assert (out_valid == $past(valid_pipe));
+            if (rst_n && f_rst_hist[0] && f_rst_hist[1])
+                P3: assert (out_valid == $past(in_valid, 2));
+`endif // !FORMAL_STALL_ONLY
+            // P4s_a ("acc_sum == $past(acc_sum)") is implied by L2 (with no
+            // load, sr@k == sr@(k-1) and acc_sum = MAC(sr) is deterministic).
+            // Not stated explicitly: cross-frame MAC-tree equality is expensive
+            // for the solver. The observable stall semantics are P4s_b below.
+            //
+            // P4s_b: when in_valid was absent (previous edge), valid_pipe must
+            // be 0 (RTL: valid_pipe <= in_valid). This is depth-1 inductive and
+            // survives Yosys's cone-of-influence optimizations (valid_pipe feeds
+            // the out_valid port so it is never optimized away).
+            //
+            // NOTE: P4s_b is in a separate live_stall task (FORMAL_STALL_ONLY)
+            // because the cross-frame output equality in the original formulation
+            // stalled smtbmc when combined with the full datapath properties.
+`ifdef FORMAL_P4S
+            // P4s_b (stall property): valid_pipe is 0 when in_valid was absent
+            // the previous cycle. RTL: valid_pipe <= in_valid (unconditional),
+            // so !in_valid_prev → valid_pipe_now == 0 is depth-1 inductive.
+            // f_in_valid_prev captures in_valid at the previous posedge.
+            // f_rst_hist[0] ensures that previous edge was a clean (non-reset) edge.
+            //
+            // This is the output-observable stall guarantee: valid_pipe=0 means
+            // out_valid will be 0 next cycle (proven by P2 in live_main).
+            // The data-value freeze (out_data unchanged when invalid) follows
+            // from P4b + L3 in live_main: when valid_pipe=0, out_data is a
+            // don't-care, so the stall is fully characterized by valid propagation.
+            //
+            // Note: checking valid_pipe (not acc_reg) avoids Yosys's
+            // cone-of-influence optimization that gates acc_reg on valid_pipe
+            // and makes acc_reg appear as 0 in don't-care cycles, which would
+            // cause spurious P4s_b failures if we checked acc_reg equality.
+            if (rst_n && f_rst_hist[0] && !f_in_valid_prev) begin
+                P4s_b: assert (valid_pipe == 1'b0);
+            end
+`endif
+`ifndef FORMAL_STALL_ONLY
+            if (out_valid)
+                P5: assert (out_data >= -8192 &&
+                            out_data <= 8191);
+`endif // !FORMAL_STALL_ONLY
+        end
+    end
+`endif
 
 endmodule

@@ -41,16 +41,35 @@ VECTOR_DIR = Path(tempfile.gettempdir()) / "precisionfit_vectors"
 
 
 def lint_rtl(rtl_path) -> dict:
-    """Lint/elaborate the generated RTL. Uses Verilator if present, else Icarus."""
+    """Lint/elaborate the generated RTL. Uses Verilator if present, else Icarus.
+
+    Verilator's -Wall catches combinational loops, sensitivity-list gaps and
+    implicit-net bugs that Icarus silently accepts. When Verilator is absent
+    the function falls back to Icarus and records a visible WARNING so callers
+    know they are getting the weaker check.
+    """
     if _which("verilator"):
         cmd = ["verilator", "--lint-only", "-Wall", str(rtl_path)]
+        fallback = False
     elif _which("iverilog"):
         cmd = ["iverilog", "-g2012", "-Wall", "-o", "/dev/null", str(rtl_path)]
+        fallback = True
     else:
-        return dict(ok=False, backend=None, output="no lint tool available")
+        return dict(ok=False, backend=None, output="no lint tool available",
+                    fallback=False)
 
     r = subprocess.run(cmd, capture_output=True, text=True)
-    return dict(ok=(r.returncode == 0), backend=cmd[0], output=r.stdout + r.stderr)
+    result = dict(ok=(r.returncode == 0), backend=cmd[0],
+                  output=r.stdout + r.stderr, fallback=fallback)
+    if fallback:
+        import warnings
+        warnings.warn(
+            f"verilator not found; using {cmd[0]} as lint fallback. "
+            "Icarus does not catch combinational-loop or sensitivity-list bugs. "
+            "Install Verilator for a complete lint check.",
+            stacklevel=2,
+        )
+    return result
 
 
 def _which(prog: str) -> bool:
@@ -136,30 +155,77 @@ def print_results(results: dict) -> bool:
 
 
 if __name__ == "__main__":
+    import warnings
     from reference import FILTER_A_SPEC, design_filter, make_test_signals
     from rtlgen import generate_rtl
 
     paths.ensure_dirs()
     h = design_filter(FILTER_A_SPEC)
-    cfg = FixedPointConfig(
+
+    # ------------------------------------------------------------------ #
+    # 1. Saturating design (the production path)                          #
+    # ------------------------------------------------------------------ #
+    cfg_sat = FixedPointConfig(
         coeff_int_bits=2, coeff_frac_bits=10,
         input_int_bits=2, input_frac_bits=14,
         acc_guard_bits=4,
         output_int_bits=2, output_frac_bits=14,
         rounding="round", saturate_output=True,
     )
-    rtl_path = generate_rtl(h, cfg, config_name="baseline_conservative")
+    rtl_path = generate_rtl(h, cfg_sat, config_name="baseline_conservative")
     module_name = "fir_baseline_conservative"
 
-    lint = lint_rtl(rtl_path)
-    print(f"lint ({lint['backend']}): {'clean' if lint['ok'] else 'WARNINGS/ERRORS'}")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        lint = lint_rtl(rtl_path)
+    backend_label = lint["backend"].split("/")[-1] if lint["backend"] else "none"
+    fallback_note = " (WARNING: Verilator absent, weaker check)" if lint.get("fallback") else ""
+    print(f"lint ({backend_label}){fallback_note}: {'clean' if lint['ok'] else 'WARNINGS/ERRORS'}")
     if not lint["ok"]:
         print(lint["output"])
 
     sigs = make_test_signals(FILTER_A_SPEC["fs"], n_samples=512)
-    results = verify_config(h, cfg, rtl_path, module_name, sigs,
+    results = verify_config(h, cfg_sat, rtl_path, module_name, sigs,
                             latency_cycles=LATENCY_CYCLES)
     ok = print_results(results)
+
+    # ------------------------------------------------------------------ #
+    # 2. Wrap-on-overflow design (saturate_output=False)                  #
+    #                                                                     #
+    # Uses a narrowed output width so that a full-scale wideband signal   #
+    # reliably overflows and exercises the two's-complement wrap path.    #
+    # The golden model's wrap() function must agree bit-for-bit with the  #
+    # RTL's non-saturating requantizer on every overflowing sample.       #
+    # ------------------------------------------------------------------ #
+    cfg_wrap = FixedPointConfig(
+        coeff_int_bits=2, coeff_frac_bits=10,
+        input_int_bits=2, input_frac_bits=14,
+        acc_guard_bits=4,
+        output_int_bits=0, output_frac_bits=3,    # 4-bit output: max ±0.875 float
+        rounding="round", saturate_output=False,  # wrap path under test
+    )
+    rtl_wrap = generate_rtl(h, cfg_wrap, config_name="test_baseline_wrap")
+    # Full-scale + wideband: both cause overflow with the narrow output width
+    sigs_wrap = {
+        k: v for k, v in make_test_signals(FILTER_A_SPEC["fs"], n_samples=512).items()
+        if k in ("full_scale", "random_wideband")
+    }
+    results_wrap = verify_config(h, cfg_wrap, rtl_wrap, "fir_test_baseline_wrap",
+                                 sigs_wrap, latency_cycles=LATENCY_CYCLES)
+    # Confirm the wrap path is actually exercised (at least one wrap must occur)
+    from fixedpoint import run_model
+    wrap_exercised = False
+    for sig in sigs_wrap.values():
+        m = run_model(sig, h, cfg_wrap)
+        out_max = (1 << (cfg_wrap.output_total_bits - 1)) - 1
+        if np.any(np.abs(m["y_raw"]) > out_max):
+            wrap_exercised = True
+            break
+    if not wrap_exercised:
+        print("  wrap_mode: SKIP (no overflow on these signals -- widen output or use louder signal)")
+    else:
+        ok_wrap = print_results(results_wrap)
+        ok = ok and ok_wrap
 
     if ok:
         print("\nAll signals bit-exact. RTL matches golden model.")

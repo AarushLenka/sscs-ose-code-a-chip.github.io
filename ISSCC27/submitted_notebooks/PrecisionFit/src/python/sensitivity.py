@@ -15,6 +15,13 @@ resulting hardware*.
 """
 import numpy as np
 
+# np.trapezoid was introduced in NumPy 2.0; np.trapz was removed in NumPy 2.0.
+# On NumPy 1.x (e.g. the Colab standard image) trapezoid does not exist yet,
+# so alias it from trapz.  On NumPy 2.x both attributes are the same function
+# and this branch is never taken.
+if not hasattr(np, "trapezoid"):
+    np.trapezoid = np.trapz  # type: ignore[attr-defined]  # NumPy 1.x only
+
 from reference import FILTER_A_SPEC, design_filter, verify_spec
 
 

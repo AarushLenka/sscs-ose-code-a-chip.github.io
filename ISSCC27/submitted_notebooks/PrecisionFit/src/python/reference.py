@@ -144,8 +144,7 @@ def float_reference(x_float: np.ndarray, h_float: np.ndarray) -> np.ndarray:
 
 
 if __name__ == "__main__":
-    ensure = RESULTS_DIR
-    ensure.mkdir(parents=True, exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     h = design_filter(FILTER_A_SPEC)
     v = verify_spec(h, FILTER_A_SPEC)
