@@ -61,6 +61,30 @@ in the notebook (section 5):
 2. The testbench's pipeline alignment (one leading zero-padding sample) was
    established by **measurement** against an impulse response, not assumed.
 
+## Verification
+
+The design has been verified at three independent levels:
+
+**Simulation (Verilator 5.x, `-Wall`)**
+- Lint clean on all generated RTL — no warnings of any kind
+- Bit-exact against the golden model on 8 signal types including wrap-on-overflow,
+  for every headline configuration (511 samples, raw integer comparison)
+- Analytical worst-case error bounds verified to exceed empirical measurements
+  on all 3 headline configs × 8 signals
+
+**Formal (SymbiYosys + Yices + abc pdr)**
+- 15 proof tasks across all 3 headline DUTs: bounded model checking (smtbmc,
+  depth 24–26, complete proofs for this architecture) plus unbounded IC3/PDR
+- Properties proven: reset semantics (P1), pipeline timing (P2/P3), stall
+  freeze (P4s), full datapath equivalence vs independent shadow MAC (P4a),
+  requantizer correctness (P4b), saturation range (P5)
+- All 15 tasks PASS; fastest < 1 s, slowest ~14 s
+
+**Mutation testing**
+- 4 injected bugs (requantizer shift off-by-one, rounding constant zeroed,
+  symmetric pre-adder sign-bit drop, center-tap constant off-by-one LSB)
+- All 4 killed by the formal property set — confirms properties are not vacuous
+
 ## Repository layout
 
 ```
@@ -69,7 +93,7 @@ precisionfit/
 ├── README.md
 ├── env/install_tools.sh          environment setup + toolchain smoke test
 ├── notebooks/
-│   ├── precisionfit.ipynb        
+│   ├── precisionfit.ipynb
 │   └── build_notebook.py         regenerates/tests the notebook from cells
 ├── src/python/
 │   ├── paths.py                  central path resolution (cwd-independent)
@@ -78,6 +102,7 @@ precisionfit/
 │   ├── metrics.py                error stats, spec margins, analytical bounds
 │   ├── sanity_check.py           convergence + path-equivalence checks
 │   ├── rtlgen.py                 Verilog generator (uniform + per-tap widths)
+│   ├── regen_rtl.py              regenerates committed RTL; checks for drift
 │   ├── verify_rtl.py             BIT-EXACT RTL-vs-model correctness gate
 │   ├── synth_yosys.py            Yosys wrapper, parses cell-count JSON
 │   ├── search.py                 uniform precision sweep
@@ -87,21 +112,27 @@ precisionfit/
 │   ├── build_comparison.py       three-way table + Pareto plot
 │   ├── final_stress_test.py      stress set + empirical-vs-analytical separation
 │   ├── generalization_filter_b.py Filter B generalization test
-│   └── parse_openlane_results.py OpenLane metrics parser (Week 4, optional)
+│   ├── formal_verify.py          SymbiYosys driver + mutation tests
+│   ├── _probe_ffir.py            formal shadow FIR model (used by harness)
+│   ├── _probe_prop.py            formal property renderer (used by harness)
+│   └── parse_openlane_results.py OpenLane metrics parser (optional)
 ├── src/verilog/
-│   ├── fir_symmetric.v.j2        the single RTL template (per-tap capable)
+│   ├── fir_symmetric.v.j2        the single RTL template (per-tap capable,
+│   │                             includes `ifdef FORMAL block for all properties)
 │   ├── fir_nonuniform.v.j2       thin include wrapper (same template, no drift)
+│   ├── fir_formal.v.j2           SymbiYosys harness template
 │   └── rtl/                      generated .v files (regenerated on demand)
 ├── src/tb/
 │   ├── fir_tb.cpp                Verilator harness (fast path)
 │   ├── fir_tb.v.j2               Icarus harness template (fallback path)
 │   ├── tb_utils.py               vector I/O + testbench rendering
 │   └── build_and_run.sh          builds/runs, auto-selecting the backend
+├── formal/                       SymbiYosys working dir (generated, not committed)
 ├── synth/
 │   ├── yosys_synth.tcl           generic-cell synthesis (used by the sweeps)
-│   ├── sky130.tcl                OpenROAD/SKY130 flow (Week 4, optional)
+│   ├── sky130.tcl                OpenROAD/SKY130 flow (optional)
 │   ├── openlane_config.json      OpenLane2 config for the 3 headline designs
-│   └── constraints.sdc           shared timing constraint (Week 4, optional)
+│   └── constraints.sdc           shared timing constraint (optional)
 ├── results/
 │   ├── sweeps/                   sweep CSVs (+ Filter B)
 │   └── pareto/                   three-way tables, Pareto plots, stress results
@@ -125,6 +156,9 @@ python src/python/build_comparison.py          # three-way table + Pareto plot
 python src/python/final_stress_test.py         # stress + bit-exactness on the 3 winners
 python src/python/generalization_filter_b.py   # Filter B              (~4 min)
 
+# formal verification (requires yosys, sby, yices)
+python src/python/formal_verify.py             # proofs + mutation tests (~3 min)
+
 # the deliverable
 python notebooks/build_notebook.py --execute   # rebuild + execute the notebook
 jupyter lab notebooks/precisionfit.ipynb       # or Kernel -> Restart & Run All
@@ -141,8 +175,15 @@ are.
 `src/tb/build_and_run.sh` prefers **Verilator** (fast) and automatically falls
 back to **Icarus Verilog**. Both harnesses implement the same stimulus
 protocol, so the bit-exact verdict is identical either way; only wall-clock
-time differs. The notebook was executed with Icarus Verilog 12 (Verilator was
-not available in that environment).
+time differs.
+
+### Formal verification backend
+
+`formal_verify.py` requires `sby` (SymbiYosys), `yosys`, and `yices` (or `z3`
+for the smtbmc engine). PDR tasks additionally use `abc`. The `formal/`
+directory is created on first run and is not committed — everything in it is
+regenerated from `src/verilog/fir_symmetric.v.j2` and
+`src/verilog/fir_formal.v.j2`.
 
 ## Scope and honest limitations
 
@@ -172,7 +213,8 @@ not available in that environment).
 ## Scope statement
 
 This is a complete submission at the "synthesized generic-cell" fidelity level:
-rock-solid RTL generation, bit-exact verification against a validated golden
-model, real synthesized area numbers, a three-way comparison, stress tests with
-analytical bounds kept separate from empirical measurements, and a
-generalization test — all reproducible with open-source tools only.
+rock-solid RTL generation, bit-exact simulation verification (Verilator `-Wall`
+clean), formal proof of all datapath invariants with mutation testing, real
+synthesized area numbers, a three-way comparison, stress tests with analytical
+bounds kept separate from empirical measurements, and a generalization test —
+all reproducible with open-source tools only.
