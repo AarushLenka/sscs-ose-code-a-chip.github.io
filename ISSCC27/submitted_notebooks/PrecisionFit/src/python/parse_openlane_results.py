@@ -14,7 +14,7 @@ import pandas as pd
 
 import paths
 
-RUNS_DIR = paths.ROOT / "openlane2" / "runs"
+RUNS_DIR = paths.ROOT / "runs"          # LibreLane default output location
 OUT_CSV = paths.PARETO_DIR / "physical_implementation_results.csv"
 
 METRIC_COLUMNS = dict(
@@ -63,15 +63,15 @@ def parse(tags=None) -> pd.DataFrame:
 
 
 def physical_flow_was_run() -> bool:
-    """True if at least one OpenLane run exists (used by the notebook)."""
+    """True if at least one LibreLane run exists (used by the notebook)."""
     return RUNS_DIR.exists() and any(RUNS_DIR.glob("*/final/metrics.csv"))
 
 
 if __name__ == "__main__":
     if not physical_flow_was_run():
-        print("No OpenLane runs found under "
+        print("No LibreLane runs found under "
               f"{paths.rel(RUNS_DIR)} -- the optional physical flow "
-              "(guide section 6) was not executed. Area in this submission is "
+              "(PD_GUIDE.md) was not executed. Area in this submission is "
               "reported as synthesized generic-cell count (relative metric).")
     else:
         parse()
