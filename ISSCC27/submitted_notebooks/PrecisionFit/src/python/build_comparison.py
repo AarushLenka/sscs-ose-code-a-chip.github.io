@@ -33,6 +33,28 @@ PLOT_PATH = paths.PARETO_DIR / "pareto_frontier.png"
 HEADLINE_JSON = paths.PARETO_DIR / "headline_configs.json"
 
 
+def select_conservative_uniform(uniform_synth_df: pd.DataFrame) -> pd.Series:
+    """
+    Select the "conservative uniform" design from a synthesized uniform-sweep
+    DataFrame.
+
+    Criterion: the config whose ``min(coeff_bits, input_bits)`` is highest —
+    this picks a *balanced* wide design rather than an imbalanced grid point
+    that happens to have many cells (e.g. huge input_bits but tiny coeff_bits).
+    Among ties the config with the most synthesized cells is chosen (falls back
+    to the widest area proxy).
+
+    Used by both Filter A (``build_comparison``) and Filter B
+    (``generalization_filter_b``) so both comparisons apply an identical
+    selection rule.
+    """
+    df = uniform_synth_df.copy()
+    df["_min_width"] = df[["coeff_bits", "input_bits"]].min(axis=1)
+    result = df.sort_values(
+        ["_min_width", "total_cells"], ascending=[False, False]).iloc[0]
+    return result.drop(labels=["_min_width"])
+
+
 def build_comparison(h=None, verbose=True):
     paths.ensure_dirs()
     uniform = pd.read_csv(UNIFORM_CSV)
@@ -40,16 +62,8 @@ def build_comparison(h=None, verbose=True):
 
     # "Best uniform" = fewest synthesized cells among passing configs.
     best_uniform = uniform.loc[uniform["total_cells"].idxmin()]
-    # "Conservative uniform" = the balanced, widest-margin config. We pick the
-    # passing config whose min(coeff_bits, input_bits) is highest -- this
-    # ensures a balanced "wide with margin" design rather than an imbalanced
-    # grid point (e.g. huge input_bits but tiny coeff_bits) that happens to
-    # produce the most cells. Falls back to max cells if min_width ties.
-    uniform = uniform.copy()
-    uniform["_min_width"] = uniform[["coeff_bits", "input_bits"]].min(axis=1)
-    conservative_uniform = uniform.sort_values(
-        ["_min_width", "total_cells"], ascending=[False, False]).iloc[0]
-    uniform = uniform.drop(columns=["_min_width"])
+    # "Conservative uniform" = the balanced, widest-margin config.
+    conservative_uniform = select_conservative_uniform(uniform)
     best_sensitivity = sens.loc[sens["total_cells"].idxmin()]
 
     comparison = pd.DataFrame([

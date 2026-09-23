@@ -32,6 +32,7 @@ from sweep_with_synth import synthesize_uniform_passing
 from sensitivity_search import sensitivity_guided_sweep, synthesize_passing
 from rtlgen import generate_rtl, generate_rtl_nonuniform
 from verify_rtl import verify_config, print_results
+from build_comparison import select_conservative_uniform
 
 UNIFORM_SWEEP = paths.SWEEPS_DIR / "filter_b_uniform_sweep.csv"
 UNIFORM_SYNTH = paths.SWEEPS_DIR / "filter_b_uniform_sweep_synth.csv"
@@ -79,7 +80,7 @@ def run_filter_b(verify=True):
 
     # ---- three-way comparison ----------------------------------------------
     best_u = uni_synth.loc[uni_synth["total_cells"].idxmin()]
-    cons_u = uni_synth.loc[uni_synth["total_cells"].idxmax()]
+    cons_u = select_conservative_uniform(uni_synth)
     best_s = sens_synth.loc[sens_synth["total_cells"].idxmin()]
 
     comparison = pd.DataFrame([

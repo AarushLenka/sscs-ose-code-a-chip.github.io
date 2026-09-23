@@ -35,7 +35,6 @@ def _acc_bits(text: str) -> int:
 
 
 def render_variant(which: str, out: Path) -> Path:
-    import re
     """Render DUT with all assert statements except property `which` removed."""
     tdir = out / "tpl"
     tdir.mkdir(parents=True, exist_ok=True)
