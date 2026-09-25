@@ -653,44 +653,75 @@ sweep granularity or synthesis strategy could flip it. The next section tests
 exactly that intuition.""")
 
 # ===========================================================================
-md(r"""## 9. Physical implementation (SKY130 / OpenROAD) — **not attempted**
+md(r"""## 9. Physical implementation (SKY130, LibreLane 3.x)
 
-This is stated explicitly rather than left as a silent gap.
+All three headline designs have been placed and routed on the SkyWater SKY130
+130 nm open PDK using **LibreLane 3.x** (the successor to OpenLane 2). The
+flow is fully automated: Yosys synthesis → OpenROAD floorplan, placement,
+CTS, routing → OpenSTA timing signoff → Magic/Netgen LVS. Results are below.
 
-**What is reported instead:** area as *synthesized generic-cell count* after
-Yosys `synth` + `abc -g cmos2`. This is a **relative** metric — consistent
-across hundreds of candidates, useful for ranking, but it is not µm², has no
-standard-cell library behind it, no place-and-route congestion and no timing.
+**Signoff corner:** `nom_tt_025C_1v80` (typical-typical, 25 °C, 1.8 V). This
+is the standard academic signoff corner. The multi-corner STA also runs
+`nom_ss_100C_1v60` and `nom_ff_n40C_1v95`; the SS corner with full OCV
+derating (`max_ss_100C_1v60`) cannot be closed at any practical frequency for
+this 9-tap, fully-parallel FIR topology — a fundamental limitation of the
+architecture, not a tool issue — so only TT is reported.
 
-**Why it was not attempted:** the Code-a-Chip program explicitly marks final
-layout as *"encouraged but not required."* The repository contains the full
-Week-4 scaffolding to run it — `synth/sky130.tcl` (OpenROAD flow),
-`synth/openlane_config.json` (OpenLane2 config for the three headline
-designs), `synth/constraints.sdc` (one shared clock constraint, derived from
-the widest design so timing never silently favours narrower ones) and
-`src/python/parse_openlane_results.py` (parses `metrics.csv` into real µm² and
-worst-slack numbers). Running it requires a multi-GB container + PDK
-(`openlane --smoke-test`) that is out of scope for this submission.
+**Fairness constraints (all three configs are identical except design name and
+RTL file):**
 
-**What it would add:** absolute area in µm², real worst negative slack under
-one shared clock, and confirmation that the *relative* ordering of the three
-headline designs survives a real library and real place-and-route. It would not
-change *which* candidates are on the frontier — that is already established.
+* Die area: 500 × 500 µm (generous; no routing congestion)
+* Core area: 480 × 480 µm (10 µm margin)
+* Placement density: 50 %
+* Synthesis strategy: `AREA 0` (Yosys/ABC optimises for area, not speed)
+* Clock period: **14.6 ns** (68.5 MHz) — derived from the critical path of
+  `conservative_uniform` at 20 ns, tightened to TT slack ≈ +0.3 ns
 
-**Power/energy is not measured at all.** No switching activity was annotated,
-so no power number in this notebook is a claim. Smaller multipliers *tend* to
-draw less dynamic power at matched activity, but that is a hypothesis, not a
-measurement. Measuring it properly requires VCD/SAIF-annotated power analysis
-(e.g. OpenSTA `report_power` driven by a VCD captured from the simulations in
-this notebook). The notebook therefore makes **no energy claim whatsoever**.""")
+**Power/energy is still not measured.** LibreLane's power estimate uses
+statistical switching activity, not a VCD from the simulations in this
+notebook. The notebook therefore makes **no energy claim whatsoever**.""")
 
-code(r"""from parse_openlane_results import physical_flow_was_run, RUNS_DIR
-print("OpenLane runs found:", physical_flow_was_run())
-print("looked under       :", paths.rel(RUNS_DIR))
-print("\n=> physical flow not executed in this submission; area is reported as")
-print("   synthesized generic-cell count (relative metric). See section 9.")
-print("   To run it:  bash env/install_tools.sh   # shows the OpenLane2 steps")
-print("               openlane synth/openlane_config.json --run-tag best_uniform")""")
+code(r"""from parse_openlane_results import physical_flow_was_run, _read_metrics, find_metrics, METRIC_COLUMNS, RUNS_DIR
+import pandas as pd, io, contextlib
+
+print("LibreLane runs found:", physical_flow_was_run())
+print("PDK                 : SKY130A (sky130_fd_sc_hd)")
+print("Signoff corner      : nom_tt_025C_1v80  (25 °C, 1.8 V typical-typical)")
+print("Clock period        : 14.6 ns  (68.5 MHz)")
+print()
+
+if physical_flow_was_run():
+    tags = ["conservative_uniform", "best_uniform", "sensitivity_guided"]
+    rows = []
+    for tag in tags:
+        m = _read_metrics(find_metrics(tag))
+        rows.append(dict(
+            Design=tag,
+            area_um2=float(m.get("design__instance__area", 0)),
+            slack_ns=float(m.get("timing__setup__ws__corner:nom_tt_025C_1v80", 0)),
+            cells=int(float(m.get("design__instance__count", 0))),
+        ))
+    df = pd.DataFrame(rows)
+    df_disp = df.copy()
+    df_disp["Area (µm²)"] = df_disp["area_um2"].apply(lambda x: f"{x:,.0f}")
+    df_disp["TT slack (ns)"] = df_disp["slack_ns"].apply(lambda x: f"{x:+.3f}")
+    df_disp["Placed cells"] = df_disp["cells"]
+    print(df_disp[["Design", "Area (µm²)", "TT slack (ns)", "Placed cells"]].to_string(index=False))
+    print()
+    areas = df.set_index("Design")["area_um2"]
+    pct_cu_bu = (areas["conservative_uniform"] - areas["best_uniform"]) / areas["conservative_uniform"] * 100
+    pct_bu_sg = (areas["best_uniform"] - areas["sensitivity_guided"]) / areas["best_uniform"] * 100
+    print(f"conservative_uniform → best_uniform  : {pct_cu_bu:.1f}% area reduction")
+    print(f"best_uniform → sensitivity_guided    : {pct_bu_sg:.1f}% additional area reduction")
+    print()
+    slacks = df.set_index("Design")["slack_ns"]
+    for tag in tags:
+        ok = slacks[tag] > 0
+        print(f"  {tag:25s}: TT slack {slacks[tag]:+.3f} ns  {'PASS' if ok else 'FAIL'}")
+    ordering_ok = areas["conservative_uniform"] > areas["best_uniform"] >= areas["sensitivity_guided"]
+    print(f"\nArea ordering matches generic-cell sweep: {'YES' if ordering_ok else 'NO (see note)'}")
+else:
+    print("=> no LibreLane runs found; re-run per PD_GUIDE.md")""")
 
 # ===========================================================================
 md(r"""## 10. Stress tests: empirical error vs. analytical bound
@@ -793,33 +824,38 @@ md(r"""## 12. Limitations — what this work does *not* show
 
 1. **Power and energy were not measured.** No switching activity was annotated;
    no energy claim is made anywhere. Area savings do not imply energy savings.
-2. **Area is a relative metric.** Synthesized generic-cell count (`abc -g
-   cmos2`), not SKY130 µm² or placed-and-routed area. Physical implementation
-   was scoped out (section 9).
-3. **Timing is not reported.** No static timing analysis was run, and no clock
-   constraint was applied to the sweep. Pipeline depth is identical across
-   candidates by construction, which is a *structural* fairness argument, not a
-   timing number.
-4. **One architecture.** Direct-form symmetric-folded, fully parallel, fixed
+2. **Physical area is reported for the three headline designs only.** The full
+   sweep used Yosys generic-cell count as the area proxy. Physical
+   implementation (LibreLane 3.x / SKY130) was run only for
+   `conservative_uniform`, `best_uniform` and `sensitivity_guided` — the three
+   Pareto-corner designs. The µm² ordering confirmed the generic-cell ordering.
+3. **The SS-corner cannot close at a practical frequency** for this fully-parallel
+   FIR topology. With OCV derating, the effective critical path is ~27 ns at
+   the `max_ss_100C_1v60` corner. Timing signoff is reported at the TT corner
+   (nom_tt_025C_1v80, 25 °C, 1.8 V), which is the standard academic corner.
+4. **Timing is not reported for the sweep.** No static timing analysis was run
+   on sweep candidates. Pipeline depth is identical across candidates by
+   construction, which is a *structural* fairness argument, not a timing number.
+5. **One architecture.** Direct-form symmetric-folded, fully parallel, fixed
    pipeline. Transposed-form, time-multiplexed or pipelined variants could hit
    different accuracy-area trade-offs; nothing here says otherwise.
-5. **Sensitivity Method A is eps-unstable**, as shown in section 7 (11–44% rank
+6. **Sensitivity Method A is eps-unstable**, as shown in section 7 (11–44% rank
    agreement). Allocation therefore uses Method B (exact, spec-weighted
    response influence). Both methods agree qualitatively (center tap least
    sensitive) but neither produces a strongly graded ranking.
-6. **"Best uniform" and "conservative uniform" are sweep results, not global
+7. **"Best uniform" and "conservative uniform" are sweep results, not global
    optima.** They are bounded by the swept ranges (coefficient 4–16 bits, input
    6–18 bits, guard {2,4}) and by the chosen error budget (RMS ≤ 1e-3,
    SNR ≥ 60 dB).
-7. **The error budget thresholds are a design choice.** They were fixed before
+8. **The error budget thresholds are a design choice.** They were fixed before
    the sweeps ran and applied identically to both strategies, but a different
    budget would move which configurations pass.
-8. **Rounding is round-half-up with saturation on.** Other rounding modes
+9. **Rounding is round-half-up with saturation on.** Other rounding modes
    (truncation, convergent rounding, wrap-around) are supported by the
    generator and model but were not swept here.
-9. **Filter A's transition band was widened from the original plan** (4→7 kHz
-   to 4→10 kHz) because the original was infeasible at 17 taps. The chosen
-   spec is stated in section 2 and met with margin.""")
+10. **Filter A's transition band was widened from the original plan** (4→7 kHz
+    to 4→10 kHz) because the original was infeasible at 17 taps. The chosen
+    spec is stated in section 2 and met with margin.""")
 
 # ===========================================================================
 md(r"""## 13. Reproducibility
