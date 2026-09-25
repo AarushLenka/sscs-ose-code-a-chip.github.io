@@ -13,7 +13,9 @@
 #
 # Licensed under the Apache License, Version 2.0. See the repo LICENSE file.
 
-create_clock -name clk -period 10.0 [get_ports clk]   ;# 100 MHz, starting point
+create_clock -name clk -period 24.5 [get_ports clk]   ;# 40.8 MHz -- derived from trial run (PD_GUIDE.md section 9)
+                                                       ;# Trial at 20 ns: SS-corner worst slack = -3.95 ns
+                                                       ;# critical path ≈ 23.95 ns, target = 23.95 + 0.3 = 24.5 ns
 
 set_input_delay  -clock clk 1.0 [all_inputs]
 set_output_delay -clock clk 1.0 [all_outputs]
