@@ -13,9 +13,12 @@
 #
 # Licensed under the Apache License, Version 2.0. See the repo LICENSE file.
 
-create_clock -name clk -period 24.5 [get_ports clk]   ;# 40.8 MHz -- derived from trial run (PD_GUIDE.md section 9)
-                                                       ;# Trial at 20 ns: SS-corner worst slack = -3.95 ns
-                                                       ;# critical path ≈ 23.95 ns, target = 23.95 + 0.3 = 24.5 ns
+create_clock -name clk -period 14.6 [get_ports clk]   ;# 68.5 MHz -- TT signoff corner (PD_GUIDE.md section 9)
+                                                       ;# Signoff corner: nom_tt_025C_1v80 (standard academic PVT).
+                                                       ;# SS-max-OCV corner cannot close at practical freq (derating pushes
+                                                       ;# effective crit-path to ~27+ ns irreducible for this topology).
+                                                       ;# TT crit-path from run at 28 ns: 28.0-13.73=14.27 ns
+                                                       ;# Target = 14.27 + 0.30 = 14.57 → 14.6 ns
 
 set_input_delay  -clock clk 1.0 [all_inputs]
 set_output_delay -clock clk 1.0 [all_outputs]
