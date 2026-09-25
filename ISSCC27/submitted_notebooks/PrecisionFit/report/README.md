@@ -10,12 +10,18 @@ either regenerated from it or from the scripts it calls.
 | `fig6_filter_b_pareto_frontier.png` | Filter B generalization test, same comparison |
 | `three_way_comparison.csv` | Three Filter A headline designs — generic-cell area, RMS error, SNR |
 | `filter_b_three_way_comparison.csv` | Same table for Filter B |
+| `layout_conservative_uniform.png` | KLayout render of the conservative_uniform placed-and-routed layout |
+| `layout_best_uniform.png` | KLayout render of the best_uniform placed-and-routed layout |
+| `layout_sensitivity_guided.png` | KLayout render of the sensitivity_guided placed-and-routed layout |
 
 Also relevant (written by scripts into `../results/`):
 
 | File | Content |
 |---|---|
 | `../results/pareto/physical_implementation_results.csv` | **Real SKY130 µm² area and TT timing for all three headline designs** (LibreLane 3.x) |
+| `../results/gds/fir_conservative_uniform.gds` | **GDS-II layout** — conservative_uniform (6.5 MB, KLayout export) |
+| `../results/gds/fir_best_uniform.gds` | **GDS-II layout** — best_uniform (4.5 MB, KLayout export) |
+| `../results/gds/fir_sensitivity_guided.gds` | **GDS-II layout** — sensitivity_guided (4.5 MB, KLayout export) |
 | `../results/pareto/stress_test.csv` | Per-signal empirical error and separate analytical worst-case bound for all three headline designs |
 | `../results/pareto/headline_configs.json` | Precision configuration for each of the three headline designs |
 | `../results/sweeps/*_synth.csv` | Every accuracy-passing configuration with its synthesized cell count (raw data behind the frontier plots) |
