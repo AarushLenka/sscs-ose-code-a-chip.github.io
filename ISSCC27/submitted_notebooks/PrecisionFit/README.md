@@ -3,7 +3,7 @@
 **Licensed under the Apache License, Version 2.0** — see [`LICENSE`](LICENSE).
 The generated RTL, result CSVs and figures are released under the same terms.
 
-**The submission artifact is [`notebooks/precisionfit.ipynb`](notebooks/precisionfit.ipynb).**
+**The submission artifact is [`precisionfit.ipynb`](precisionfit.ipynb).**
 The material in `src/` is the development and verification layer the notebook calls
 into; the notebook alone tells the whole story and can be read top to bottom
 without opening any `.py` file.
