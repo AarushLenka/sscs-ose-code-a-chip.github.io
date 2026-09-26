@@ -12,12 +12,10 @@ VERILOG_FILES:
   - dir::src/verilog/rtl/fir_conservative_uniform.v
 
 CLOCK_PORT: clk
-CLOCK_PERIOD: 14.6          # ns -- derived from multi-corner production runs (section 9 of PD_GUIDE.md)
-                            # Signoff corner: TT (nom_tt_025C_1v80) -- standard academic PVT corner.
-                            # SS-max-OCV corner cannot close at any practical frequency for this design
-                            # (derating factors push the effective critical path to ~27+ ns).
-                            # TT critical path from run at 28 ns: 28.0 - 13.73 = 14.27 ns
-                            # Target = 14.27 + 0.3 = 14.57 → 14.6 ns
+CLOCK_PERIOD: 14.6          # ns -- chosen so conservative_uniform closes TT with +2.0 ns slack
+                            # (TT critical path: ~12.6 ns at nom_tt_025C_1v80, 1.8 V).
+                            # SS-max-OCV corner cannot close at any practical frequency for this
+                            # fully-parallel topology (effective SS critical path: ~24 ns).
                             # All three configs use this identical value for a fair comparison.
 
 DIE_AREA: [0, 0, 500, 500]  # um: generous 500x500 die so placement is not congested

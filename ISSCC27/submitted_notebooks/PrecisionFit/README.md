@@ -126,9 +126,7 @@ precisionfit/
 ├── README.md                         this file
 ├── PD_GUIDE.md                       step-by-step LibreLane/SKY130 PD reference
 ├── env/install_tools.sh              environment setup + toolchain smoke test
-├── notebooks/
-│   ├── precisionfit.ipynb            the deliverable — submission artifact
-│   └── build_notebook.py            regenerates/executes the notebook from cells
+├── precisionfit.ipynb                the deliverable — submission artifact
 ├── src/python/
 │   ├── paths.py                      central path resolution (cwd-independent)
 │   ├── reference.py                  float64 reference filter (A + B), test signals
@@ -155,7 +153,7 @@ precisionfit/
 │   │                                 includes `ifdef FORMAL block for all properties)
 │   ├── fir_nonuniform.v.j2           thin include wrapper (same template, no drift)
 │   ├── fir_formal.v.j2               SymbiYosys harness template
-│   └── rtl/                          generated .v files (regenerated on demand)
+│   └── rtl/                          generated .v files for the six headline designs
 ├── src/tb/
 │   ├── fir_tb.cpp                    Verilator harness (fast path)
 │   ├── fir_tb.v.j2                   Icarus harness template (fallback)
@@ -201,7 +199,7 @@ python src/python/generalization_filter_b.py  # Filter B            (~4 min)
 python src/python/formal_verify.py          # proofs + mutation tests (~3 min)
 
 # the deliverable
-python notebooks/build_notebook.py --execute
+jupyter nbconvert --to notebook --execute --inplace precisionfit.ipynb
 ```
 
 ### Physical implementation (LibreLane 3.x + SKY130)

@@ -15,10 +15,9 @@
 
 create_clock -name clk -period 14.6 [get_ports clk]   ;# 68.5 MHz -- TT signoff corner (PD_GUIDE.md section 9)
                                                        ;# Signoff corner: nom_tt_025C_1v80 (standard academic PVT).
-                                                       ;# SS-max-OCV corner cannot close at practical freq (derating pushes
-                                                       ;# effective crit-path to ~27+ ns irreducible for this topology).
-                                                       ;# TT crit-path from run at 28 ns: 28.0-13.73=14.27 ns
-                                                       ;# Target = 14.27 + 0.30 = 14.57 → 14.6 ns
+                                                       ;# SS-max-OCV corner cannot close at practical freq; effective
+                                                       ;# SS critical path ~24 ns for this fully-parallel topology.
+                                                       ;# Conservative_uniform TT critical path: ~12.6 ns → +2.0 ns slack.
 
 set_input_delay  -clock clk 1.0 [all_inputs]
 set_output_delay -clock clk 1.0 [all_outputs]

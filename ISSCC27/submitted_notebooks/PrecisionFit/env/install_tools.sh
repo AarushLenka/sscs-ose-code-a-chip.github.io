@@ -80,4 +80,4 @@ echo
 echo "Done. Next:"
 echo "  source venv/bin/activate"
 echo "  cd src/python && python sanity_check.py   # golden-model convergence"
-echo "  jupyter lab notebooks/precisionfit.ipynb  # the submission artifact"
+echo "  jupyter nbconvert --to notebook --execute --inplace precisionfit.ipynb"
