@@ -261,7 +261,7 @@ directory is created on first run and is not committed.
   corner headline designs. The µm² ordering confirmed the generic-cell ordering.
 - **The SS-corner (max_ss_100C_1v60 with OCV derating) cannot close at a
   practical frequency** for this fully-parallel 9-multiplier FIR topology.
-  The effective critical path under full derating is ~27 ns; timing signoff is
+  The effective critical path under full derating is ~24 ns; timing signoff is
   reported at the TT corner (nom_tt_025C_1v80), the standard academic PVT
   corner.
 - **One architecture** (direct-form, symmetric-folded, fully parallel, fixed
